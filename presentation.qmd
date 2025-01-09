@@ -1,0 +1,445 @@
+---
+title: "Trabajo Práctico Nº 2"
+subtitle: "Laboratorio de datos 2023"
+format: html
+self-contained: true
+editor: visual
+---
+
+### Integrantes del grupo:
+
+-   Agustina Nerea Cueto, LU: 1604/21
+
+-   Ailen Violeta Bogao, LU: 25/21
+
+-   Juan Manuel Moreira Siri, LU: 592/20
+
+## Regresión
+
+En el siguiente trabajo vamos a elaborar un modelo de regresión para predecir el número de usos diarios del sistema de Ecobici. Para ello analizaremos primero cuáles son las variables qué más influyen a la hora de usar dicho sistema.
+
+Las variables a analizar son:
+
+-   temperatura del día (promedio, mínima o máxima).
+
+-   si llueve o no llueve.
+
+-   presión atmosférica.
+
+-   velocidad del viento.
+
+-   si es día laborable o no laborable.
+
+Primero preparamos el dataset ya que algunas de estas variables no están directamente visibles.
+
+```{r, output = FALSE}
+library(tidyr)
+Sys.setlocale("LC_TIME", "es_AR.UTF-8")
+#library(tidyverse)
+library(dplyr)
+library(ggplot2)
+load("tp2.RData")
+library(Metrics)
+library(class)
+library(rpart)
+library(rpart.plot)
+
+clima_ecobici = clima_ecobici %>% mutate(llueve = prcp > 0) %>% mutate(dia_semana = weekdays(date)) %>% 
+  mutate(dia_laborable = dia_semana != 'sábado' & dia_semana != 'domingo' & date != '2022-02-28' &
+           date != '2022-03-01' &
+           date != '2022-03-24' &
+           date != '2022-04-14' &
+           date != '2022-04-15' &
+           date != '2022-05-18' &
+           date != '2022-05-25' &
+           date != '2022-06-17' &
+           date != '2022-06-20' &
+           date != '2022-08-15' &
+           date != '2022-10-10' &
+           date != '2022-11-21' &
+           date != '2022-12-08' &
+           date != '2022-12-09' ) %>% 
+  mutate(categoria_temp_promedio = cut(tavg, breaks=c(-Inf, 13,22,27,Inf), labels = c('Menor a 13°','13° a 22°', '22° a 27°', 'Mayor a 27°')))
+```
+
+Veamos el promedio de usos para los días que llueve y los que no:
+
+```{r}
+clima_ecobici %>%
+  group_by(llueve) %>%
+  summarise(mean(n))
+```
+
+Observamos que el promedio es ligeramente menor los días que llueve. Hagámos el mismo análisis para los días laborables:
+
+```{r}
+clima_ecobici %>%
+  group_by(dia_laborable) %>%
+  summarise(mean(n))
+```
+
+Podemos ver que el promedio de usos es mucho mayor en los días laborables.
+
+Ahora para analizar las variables que quedan haremos gráficos, ya que son variables numéricas
+
+```{r}
+ggplot(clima_ecobici, aes(x = pres, y = n)) + geom_point() + labs(title = "Usos según presión atmosferica", y = "Cantidad de usos", x = "Presión") + theme(plot.title = element_text(face='bold'))
+```
+
+```{r}
+ggplot(clima_ecobici, aes(x = wspd, y = n)) + geom_point() + labs(title = "Usos según velocidad del viento", y = "Cantidad de usos", x = "Velocidad del viento") + theme(plot.title = element_text(face='bold'))
+```
+
+```{r}
+ggplot(clima_ecobici, aes(x = tavg, y = n)) + geom_point() + labs(title = "Usos según temperatura promedio", y = "Cantidad de usos", x = "Temperatura promedio (°C)") + theme(plot.title = element_text(face='bold'))
+```
+
+En principio los datos parecen estar bastante dispersos, sin embargo, en este último gráfico puede observarse una separación de los datos en dos nubes (una encima de otra). Veamos que pasa si separamos los puntos por color en base a si son de un día laborable o no:
+
+```{r}
+ggplot(clima_ecobici, aes(x = tavg, y = n)) + geom_point(aes(color=dia_laborable)) + labs(title = "Usos según temperatura promedio y día laborable", y = "Cantidad de usos", x =  "Temperatura promedio (°C)") + theme(plot.title = element_text(face='bold'))
+```
+
+Para armar el modelo usaremos las variables `dias_laborables` y `tavg` porque observamos (mediante el análisis exploratorio realizado anteriormente) que son probablemente las mejores predictoras.
+
+```{r}
+# Creación de datasets de entrenamiento y de prueba
+set.seed(22)
+sample = sample(c(TRUE, FALSE), nrow(clima_ecobici), replace = T, prob=c(0.8,0.2))
+train  <- clima_ecobici[sample, ]
+test   <- clima_ecobici[!sample, ]
+
+# Modelo de regresión lineal (Entrenamiento)
+model = lm(n ~ dia_laborable + tavg, train)
+summary(model)
+b0 = coef(model)[1]
+b1 = coef(model)[2]
+b2 = coef(model)[3]
+```
+
+El modelo que armamos es de la forma y = b0 + b2⋅tavg cuando es día no laborable, y cuando es día laborable es de la forma y = b0+b1 + b2⋅tav. Por lo tanto vemos que ambas rectas van a tener la misma pendiente y van a diferir en el valor de b1.
+
+Veamos que tan bien predice nuestro modelo:
+
+```{r}
+test$usos_pred = predict(model, test, type = "response")
+
+# error cuadratico medio, y r cuadrado
+rmse(test$n, test$usos_pred)
+summary(model)$r.squared 
+# El R-cuadrado más bajo es 0, lo que significa que los puntos no están explicados por la regresión, mientras que el valor más alto es 1 y significa que todos los puntos están explicados por la línea de regresión. 
+# En este caso obtuvimos un 0.7541647 que es bastante cercano a 1, lo cual nos dice que nuestro modelo es bastante bueno.
+
+usos_pred = predict(model, clima_ecobici, type = "response")
+## Gráficos
+ggplot(clima_ecobici, aes(x = tavg, y = n)) + geom_point(aes(color=dia_laborable)) + 
+  labs(title = "Usos según temperatura promedio y día laborable", y = "Cantidad de usos", x = "Temperatura promedio (ºC)")  + theme(plot.title = element_text(face='bold')) +
+  geom_abline(intercept = b0 , slope = b2 , color = "red") + # dia_laborable == FALSE
+  geom_abline(intercept = b0+b1 , slope = b2 , color = "blue") # dia_laborable == TRUE
+
+```
+
+La línea roja representa la relación entre la temperatura y la cantidad de usos para los días no laborables. La línea azul representa la relación para los días laborables.
+
+## Clasificación
+
+En esta segunda parte realizamos un clasificador de noticias en "fake news" y en "reales". Trabajamos con las variables predictoras:
+
+-   title_has_excl: variable binaria que indica si el título de la noticia tiene o no signos de exclamación.
+-   negative: porcentaje estimado de palabras en el título que tienen connotaciones negativas.
+-   title_words: número de palabras en el título.
+
+Le agregamos a la base original dos columnas:
+
+-   `categoria_negativa` : Segun la valoración de la connotación negativa de las palabras en el título, se los agrupó en categorias.
+
+-   `cantidad_palabras_titulo`: Según la cantidad de palabras en el título, se los agrupo en categorias.
+
+Esto nos permite un mejor analisis exploratorio de las variables para representar en los graficos que se exponen a continuación.
+
+### Analisis exploratorio
+
+```{r}
+fake_news= fake_news %>%
+  mutate(categoria_negativa = cut(negative, breaks=c(-Inf, 2,4,6,8,Inf), labels = c('Menor a 2%','2% a 4%', '4% a 6%', '6% a 8%','Más de 8%')))%>%
+  mutate(cantidad_palabras_titulo = cut(title_words, breaks=c(-Inf, 5,10,15,20,Inf), labels = c('Menor a 5','5 a 10', '10 a 15', '15 a 20','Más de 20')))
+
+```
+
+```{r}
+fake_news %>%
+  group_by(type)%>%
+  count(title_has_excl)%>%
+  ggplot(aes(x=title_has_excl, y = n, fill = type))+
+  geom_col()+
+  labs(title = 'Cantidad de noticias que contienen signos de exclamación', x= 'No contiene / Contiene', y='Cantidad')+
+  theme(plot.title = element_text(face='bold'))
+
+```
+
+```{r}
+fake_news %>%
+  group_by(type)%>%
+  count(categoria_negativa)%>%
+  ggplot(aes(x=categoria_negativa, y = n, fill = type))+
+  geom_col()+
+  labs(title = 'Cantidad de noticias que contienen % expresiones negativas en el titulo', x= '% contenido', y='Cantidad')+
+  theme(plot.title = element_text(face='bold'))
+```
+
+```{r}
+fake_news %>%
+  group_by(type)%>%
+  count(cantidad_palabras_titulo)%>%
+  ggplot(aes(x=cantidad_palabras_titulo, y = n, fill = type))+
+  geom_col()+
+  labs(title = 'Cantidad de palabras en el titulo', x= 'Cantidad de palabras en el titulo', y='Cantidad de noticias')+
+  theme(plot.title = element_text(face='bold'))
+```
+
+**Conclusión del analisis exploratorio:** Podemos observar que las noticias falsas tienen mayor cantidad de signos de exclamación en el titulo que las noticias reales, además tienen mayor porcentaje de palabras de connotación negativa en sus titulos y los titulos son más cortos.
+
+Ahora reducimos la base para trabajar mejor. Solo dejamos el tipo de noticia y las tres variables a considerar.
+
+```{r}
+fake_news2 = fake_news %>%
+  select(type, title_has_excl, negative, title_words)
+```
+
+Armamos las bases de entrenamiento y de test,
+
+```{r}
+set.seed(123)
+
+fakenews_train = fake_news2 %>% 
+  sample_frac(0.8,replace = F)
+
+fakenews_test = anti_join(fake_news2,fakenews_train)
+```
+
+### **Modelo KNN**
+
+Para poder armar el modelo de KNN es necesario elegir primero un K que sirva de referencia para que el modelo pueda predecir la respuesta. Dependiendo el K elegido, va a variar la precisión del modelo. Como la base de entrenamiento tiene 120 observaciones, el K máximo que se puede elegir es 120, y el mínimo es 1.
+
+Para poder ver cuales serian los K que mayor precisión arrojan, elaboramos un dataframe llamado `resultado` que tiene dos columnas: `k` y `precisión` para ese k. Para realizarlo, utilizamos un bucle `for` en donde se evalua la precisión para cada k, con un k en un rango entre 1 y 120.
+
+```{r}
+k = 1:120
+
+resultado = data.frame(k, precision = 0)
+
+for (n in k){
+  fakenews_model = knn(train=fakenews_train[, -1],
+                       cl=fakenews_train[, 1],
+                       test=fakenews_test[, -1],
+                       k=n)
+
+  resultado$precision[n] = mean(fakenews_model == fakenews_test[, 1])
+}
+```
+
+Ordenamos el dataframe resultado en orden decreciente segun la precisión para ver cuales son los dos k que tienen mayor precisión.
+
+```{r}
+k_maximo = resultado$k[order(resultado$precision, decreasing = TRUE)[1]]
+k_maximo
+```
+
+```{r}
+k_segundo = resultado$k[order(resultado$precision, decreasing = TRUE)[2]]
+k_segundo
+```
+
+Entrenamos el modelo con cada k
+
+```{r}
+fakenews_model_kmax = knn(train=fakenews_train[, -1],
+                          cl=fakenews_train[, 1],
+                          test=fakenews_test[, -1],
+                          k=k_maximo)
+
+fakenews_model_2k = knn(train=fakenews_train[, -1],
+                        cl=fakenews_train[, 1],
+                        test=fakenews_test[, -1],
+                        k=k_segundo)
+```
+
+Observamos la precisión del modelo segun cada k
+
+```{r}
+precision_kmax = mean(fakenews_model_kmax == fakenews_test[, 1])
+precision_kmax
+```
+
+```{r}
+precision_2k = mean(fakenews_model_2k == fakenews_test[, 1])
+precision_2k
+```
+
+Elaboramos la matiz de confusión del modelo según cada k
+
+*Matriz de confusión para el k maximo*
+
+```{r}
+mc_kmax=table(fakenews_model_kmax,fakenews_test[, 1])
+mc_kmax
+```
+
+*Conclusión*:
+
+```{r echo=FALSE}
+cat("El modelo predijo", sum(mc_kmax['fake', ]), "noticias falsas y en el test ")
+if (sum(mc_kmax[ ,'fake']) == sum(mc_kmax['fake', ])){cat('el valor coincidió.')} else {cat('el valor no coincidió.')}
+cat('\nRespecto de las noticias reales, predijo ', sum(mc_kmax['real', ]),' noticias pero solo ', mc_kmax['real','real'],' coinciden.')
+```
+
+*Matriz de confusión para el segundo k*
+
+```{r}
+mc_2k = table(fakenews_model_2k,fakenews_test[, 1])
+mc_2k
+```
+
+*Conclusión:*
+
+```{r echo=FALSE}
+cat("El modelo predijo", sum(mc_2k['fake', ]), "noticias falsas y en el test ")
+if (sum(mc_2k[ ,'fake']) == sum(mc_2k['fake', ])){cat('el valor coincidió.')} else {cat('el valor no coincidió.')}
+cat('\nRespecto de las noticias reales, predijo ', sum(mc_2k['real', ]),' noticias pero solo ', mc_2k['real','real'],' coinciden.')
+```
+
+Finamente, el siguiente gráfico de evolución se observa la precisión en función del K.
+
+```{r}
+resultado %>% 
+  ggplot(aes(k,precision))+
+  geom_line()+
+  geom_vline(xintercept = k_maximo,
+             linetype = 2,
+             color = 2)+
+  geom_vline(xintercept = k_segundo,
+             linetype = 2,
+             color= 4)+
+  geom_hline(yintercept = precision_kmax,
+             linetype = 2,
+             color = 2)+
+  geom_hline(yintercept = precision_2k,
+             linetype = 2,
+             color= 4)+
+  geom_point(aes(k_maximo,precision_kmax), color = 'red')+
+  geom_point(aes(k_segundo,precision_2k), color = 'blue')+
+  labs(title = 'Evolución de la precisión según K elegido para el modelo')
+```
+
+# Árbol de Decisión
+
+Elaboramos el modelo
+
+```{r}
+arbol_fake = rpart(type~., data = fakenews_train)
+```
+
+Lo graficamos
+
+```{r}
+rpart.plot(arbol_fake)
+```
+
+Agregamos una columna a la base de test con el resultado de la predicción
+
+```{r}
+fakenews_test$pred_arbol=predict(arbol_fake,fakenews_test,type = 'class')
+```
+
+Evaluamos la precisión del modelo (Accuracy)
+
+```{r}
+precision_arbol = mean(fakenews_test$pred_arbol==fakenews_test$type)
+precision_arbol
+```
+
+Evaluamos la matriz de confusión del árbol de decisión
+
+```{r}
+mc_arbol = table(fakenews_test$pred_arbol,fakenews_test$type)
+mc_arbol
+```
+
+*Conclusión de la matriz de confusión:*
+
+```{r echo=FALSE}
+cat("El modelo predijo", sum(mc_arbol['fake', ]), "noticias falsas y en el test ")
+if (sum(mc_arbol[ ,'fake']) == sum(mc_arbol['fake', ])){cat('el valor coincidió.')} else {cat('el valor no coincidió.')}
+cat('\nRespecto de las noticias reales, predijo ', sum(mc_arbol['real', ]),' noticias pero solo ', mc_arbol['real','real'],' coinciden.')
+```
+
+**Comparación entre ambos modelos. CONCLUSIÓN:**
+
+```{r echo=FALSE}
+precisiones_modelos = c(precision_kmax,precision_2k,precision_arbol)
+mayor_precision = max(precisiones_modelos)
+if (mayor_precision == precision_kmax) {
+  cat('El modelo que mayor precisión tiene es el Modelo KNN con el K=',k_maximo, 'y su precisión es de ', precision_kmax*100, '%')} else if (mayor_precision == precision_2k) {cat('El modelo que mayor precisión tiene es Modelo KNN con el K=', k_segundo, 'y su precisión es de ', precision_2k*100,'%')} else {cat('El modelo que mayor precisión tiene es el árbol de decisión y su precisión es de ', precision_arbol*100,'%')}
+  
+```
+
+Ahora creamos un nuevo dataframe con los datos nuevos que hay que predecir:
+
+```{r}
+new_data = data.frame(type = NA,
+                      title_has_excl= FALSE,
+                      negative = 6.00,
+                      title_words = 15)
+```
+
+Hacemos la predicción según modelo KNN:
+
+*con K=maximo*
+
+```{r}
+prob_kmax = knn(train=fakenews_train[, -1],
+                cl=fakenews_train[, 1],
+                test=new_data[, -1],
+                k=k_maximo,
+                prob = TRUE)
+```
+
+```{r echo=FALSE}
+cat('La probabilidad de que la noticia sea fake es de ')
+if (prob_kmax[1] == 'fake') {
+  probabilidad_fake = attr(prob_kmax, 'prob')
+} else {
+  probabilidad_fake = 1 - attr(prob_kmax, 'prob')
+}
+cat(probabilidad_fake * 100, '%\n')
+```
+
+*con K=segundo*
+
+```{r}
+prob_2K = knn(train=fakenews_train[, -1],
+              cl=fakenews_train[, 1], 
+              test=new_data[, -1],
+              k=k_segundo,
+              prob = TRUE)
+```
+
+```{r echo=FALSE}
+cat('La probabilidad de que la noticia sea fake es de ')
+if (prob_2K[1] == 'fake') {
+  probabilidad_fake2 = attr(prob_2K, 'prob')} else {
+  probabilidad_fake2 = 1 - attr(prob_2K, 'prob')
+} 
+cat(probabilidad_fake2 * 100, '%\n')
+```
+
+Hacemos la predicción según árbol de decisión y le agregamos la columna al dataframe en estudio:
+
+```{r}
+new_data$pred_arbol=predict(arbol_fake,new_data,type = 'prob')
+
+```
+
+```{r echo=FALSE}
+cat('La probabilidad de que la noticia sea fake es de ', new_data$pred_arbol[,'fake']*100,'%')
+```
